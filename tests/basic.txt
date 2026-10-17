@@ -1,0 +1,35 @@
+# Run with: rhun PROJECT --headless 1000x600 --scale 1 --extensions DIR --script tests/basic.txt
+# where DIR/rhun-editor/words holds extension.ini and bin/ (tests/run.sh sets that up).
+# Opening a file starts the extension ([provides] complete = *); other.txt's words join the list.
+wait 100
+open proj/other.txt
+open proj/sample.txt
+wait-ext words running
+wait 300
+key ctrl+End
+type ap
+wait 300
+wait 300
+print-complete
+key Return
+print-doc
+cmd words.stats
+wait 300
+wait 300
+print-toast
+# a word typed in other.txt is in sample.txt's next list
+open proj/other.txt
+key ctrl+End
+type apron
+key Escape
+open proj/sample.txt
+key Return
+type ap
+wait 300
+wait 300
+print-complete
+key Down
+key Down
+key Down
+key Tab
+print-doc

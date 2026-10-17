@@ -1,0 +1,28 @@
+# Builds on the three systems rhun runs on, and runs the headless test against the latest rhun.
+name: ci
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: |
+          cxx=c++; [ "$RUNNER_OS" = Windows ] && cxx=clang++
+          $cxx -std=c++17 -O2 -Wall -Wextra -Werror -D_CRT_SECURE_NO_WARNINGS -o words main.cpp
+  headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: rhun
+        run: curl -fsSL https://github.com/vshvedov/rhun/releases/latest/download/install.sh | sh
+      - run: sh tests/run.sh "$HOME/.local/bin/rhun"

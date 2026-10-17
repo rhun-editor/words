@@ -1,0 +1,74 @@
+# A tag vX.Y.Z (equal to version in extension.ini) builds the extension on Linux, macOS and
+# Windows and publishes what rhun's Install from GitHub takes (https://rhun.app/extensions/v1/,
+# section 11): NAME-TARGET.tar.gz, the extension folder's contents at its top level, and
+# sha256sums.txt covering them. Linux links statically, so the C++ runtime travels with it.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { target: linux-x86_64, os: ubuntu-latest }
+          - { target: macos-arm64, os: macos-latest }
+          - { target: windows-x64, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: |
+          set -e
+          name=$(sed -n 's/^name *= *//p' extension.ini | head -1)
+          mkdir -p out
+          case "${{ matrix.target }}" in
+            linux-x86_64) c++ -std=c++17 -O2 -static -o "out/$name-linux-x86_64" main.cpp ;;
+            macos-arm64) c++ -std=c++17 -O2 -o "out/$name-macos-arm64" main.cpp ;;
+            windows-x64) clang++ -std=c++17 -O2 -D_CRT_SECURE_NO_WARNINGS -o "out/$name-windows-x64.exe" main.cpp ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: out
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag is the manifest's version
+        run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^version *= *//p' extension.ini | head -1)"
+      - uses: actions/download-artifact@v4
+        with:
+          path: bins
+      - name: Pack
+        run: |
+          set -e
+          name=$(sed -n 's/^name *= *//p' extension.ini | head -1)
+          icon=$(sed -n 's/^icon *= *//p' extension.ini | head -1)
+          mkdir -p dist
+          for t in linux-x86_64 macos-arm64 windows-x64; do
+            stage=$(mktemp -d)
+            mkdir -p "$stage/bin"
+            cp bins/bin-$t/* "$stage/bin/"
+            chmod +x "$stage/bin/"*
+            cp extension.ini README.md LICENSE "$stage/"
+            if [ -n "$icon" ]; then cp "$icon" "$stage/"; fi
+            tar -czf "dist/$name-$t.tar.gz" -C "$stage" .
+          done
+          (cd dist && sha256sum *.tar.gz > sha256sums.txt)
+          cat dist/sha256sums.txt
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" \
+            --notes "Install it in rhun: the extensions button in the title bar, then Install from GitHub, then ${GITHUB_REPOSITORY}."
