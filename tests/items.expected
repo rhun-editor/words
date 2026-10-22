@@ -1,0 +1,20 @@
+ext=words state=running
+complete open=2 items=6 shown=4 sel=0 labels=apple|apex|apricot|grape
+selected label=apple detail=3 uses doc=3 in sample.txt\nfirst: sample.txt:1: apple banana apple resolved=1 replace=1 commit=., suffix= deprecated=0 waiting=0
+signature open=0 from=0 to=0 text=
+apple banana apple
+cherry apple banana
+apricot
+
+apple
+<eod>
+complete open=2 items=6 shown=1 sel=0 labels=banana
+selected label=banana detail=2 uses doc=2 in sample.txt\nfirst: sample.txt:1: apple banana apple resolved=1 replace=0 commit=., suffix= deprecated=0 waiting=0
+signature open=0 from=0 to=0 text=
+apple banana apple
+cherry apple banana
+apricot
+
+apple
+banana.
+<eod>

@@ -1,0 +1,27 @@
+# Run with: rhun PROJECT --headless 1000x600 --scale 1 --extensions DIR --script tests/items.txt
+# (tests/run.sh sets it up, with the setting commit_characters = . ,). Protocol 1.1's
+# complete-items: the selected item's uses come when it is selected, Shift+Enter replaces the rest
+# of the word, and typing a commit character puts the selected word in first.
+wait 100
+open proj/other.txt
+open proj/sample.txt
+wait-ext words running
+wait 300
+key ctrl+End
+key Return
+type apzz
+key Left
+key Left
+key ctrl+space
+wait 300
+wait 300
+print-complete
+key shift+Return
+print-doc
+key Return
+type ba
+wait 300
+wait 300
+print-complete
+type .
+print-doc

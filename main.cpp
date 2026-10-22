@@ -1,6 +1,10 @@
 // words: completes the word being typed with the words of the open documents, the most used
 // first, and counts a document's distinct words. C++17 and the standard library on rhunext.h
 // (https://github.com/rhun-editor/extension-protocol/tree/main/c).
+// Protocol 1.1, feature complete-items: each item says the rest of the word at the cursor is
+// what it may replace (Shift+Enter, or [editor] complete_replace = yes), where it is used comes
+// when the item is selected (resolve), and the setting commit_characters accepts the selected
+// word when one of them is typed.
 #define RHUNEXT_IMPLEMENTATION
 #include "rhunext.h"
 
@@ -32,6 +36,7 @@ struct Doc {
 
 struct State {
     std::map<rx_doc, Doc> docs;     // by id, which is the order they opened in
+    std::string commit;             // the setting commit_characters: printable, without spaces
 };
 
 bool word_byte(unsigned char c) {
@@ -151,6 +156,8 @@ int on_complete(rx_ext *ext, const rx_ask *req, rx_buf *out, void *user) {
     rx_pos start = rx_word_start(text, len, req->at);
     size_t from = cur - std::min(cur, static_cast<size_t>(req->at.col - start.col));
     std::string typed(reinterpret_cast<const char *>(text) + from, cur - from);
+    size_t rest = 0;        // the word's bytes after the cursor
+    while (cur + rest < len && word_byte(text[cur + rest])) rest++;
 
     // this document's words, leaving out the one at the cursor
     Counts here;
@@ -201,14 +208,63 @@ int on_complete(rx_ext *ext, const rx_ask *req, rx_buf *out, void *user) {
         return a.uses != b.uses ? a.uses > b.uses : a.word < b.word;
     });
     if (items.size() > kMaxItems) items.resize(kMaxItems);
+    // the item goes in from the word's start to the cursor (Enter), or over the rest of the word
+    // too (the replace range: Shift+Enter)
     rx_range r = {start, req->at};
+    rx_range whole = {start, {req->at.line, req->at.col + static_cast<int>(rest)}};
     for (const Item &item : items) {
         std::string detail = item.where.empty()
             ? std::to_string(item.uses) + (item.uses == 1 ? " use" : " uses")
             : "in " + item.where;
-        rx_list_item(&list, r, "text", item.word.c_str(), nullptr, detail.c_str(), nullptr);
+        rx_item_extra x{};
+        x.resolve = item.word.data();       // what complete-resolve gets back: the word
+        x.resolve_len = item.word.size();
+        if (rest > 0) x.replace = &whole;
+        if (!st->commit.empty()) x.commit = st->commit.c_str();
+        rx_list_item_extra(&list, r, "text", item.word.c_str(), nullptr, detail.c_str(), nullptr, nullptr, nullptr,
+                           0, -1, &x);
     }
     rx_list_finish(&list, out);
+    return 1;
+}
+
+// The documentation of the selected item (complete-items' resolve, asked only for the item the
+// user looks at): how often each open file uses the word, and the line of its first use here.
+int on_resolve(rx_ext *ext, const rx_resolve_ask *req, rx_buf *out, void *user) {
+    State *st = static_cast<State *>(user);
+    std::string word(reinterpret_cast<const char *>(req->data), req->len);
+    std::string doc, first;
+    for (auto &kv : st->docs) {
+        int uses = 0;
+        if (kv.first == req->doc) {
+            // this document as the list saw it: count, and keep the first line that uses it
+            size_t len = 0;
+            unsigned char *text = rx_text(ext, kv.first, &len, nullptr);
+            if (!text) continue;
+            int line = 1;
+            size_t line_start = 0, scanned = 0;
+            each_word(text, len, [&](size_t s, size_t e) {
+                if (e - s != word.size() || std::memcmp(text + s, word.data(), word.size()) != 0) return;
+                for (; scanned < s; scanned++)
+                    if (text[scanned] == '\n') line++, line_start = scanned + 1;
+                if (uses++ == 0) {
+                    size_t end = line_start;
+                    while (end < len && text[end] != '\n') end++;
+                    first = file_name(kv.second.path) + ":" + std::to_string(line) + ": " +
+                            std::string(reinterpret_cast<const char *>(text) + line_start, std::min<size_t>(end - line_start, 200));
+                }
+            });
+            std::free(text);
+        } else if (const Counts *c = counts_of(ext, kv.first, kv.second)) {
+            auto it = c->find(word);
+            uses = it == c->end() ? 0 : it->second;
+        }
+        if (uses == 0) continue;
+        if (!doc.empty()) doc += ", ";
+        doc += std::to_string(uses) + " in " + file_name(kv.second.path);
+    }
+    if (!first.empty()) doc += "\nfirst: " + first;
+    rx_resolve_answer(out, nullptr, doc.empty() ? nullptr : doc.c_str(), nullptr, nullptr, 0, 0, 0);
     return 1;
 }
 
@@ -236,7 +292,13 @@ void on_command(rx_ext *ext, const char *name, rx_doc doc, void *) {
 void on_event(rx_ext *, const rx_event *ev, void *user) {
     State *st = static_cast<State *>(user);
     std::string name = ev->name;
-    if (name == "opened" && ev->argc >= 4) {
+    if (name == "setting" && ev->argc >= 1 && std::string(ev->argv[0]) == "commit_characters") {
+        // setting KEY VALUE: the value is the rest of the line; spaces between characters go
+        const char *v = rx_event_tail(ev, 1);
+        st->commit.clear();
+        for (; v && *v; v++)
+            if (*v > ' ' && *v < 0x7f && st->commit.find(*v) == std::string::npos && st->commit.size() < 16) st->commit += *v;
+    } else if (name == "opened" && ev->argc >= 4) {
         // opened DOC VERSION LANG PATH: the path is the rest of the line after three fields
         const char *path = ev->rest;
         for (int k = 0; k < 3 && path; k++) {
@@ -263,5 +325,6 @@ int main() {
     h.event = on_event;
     h.command = on_command;
     h.complete = on_complete;
-    return rx_run("complete", &h, &st);
+    h.complete_resolve = on_resolve;
+    return rx_run("complete complete-items", &h, &st);
 }
